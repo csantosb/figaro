@@ -35,9 +35,21 @@ cdef double _log_norm(np.ndarray[double, ndim = 1, mode = "c"] x, np.ndarray[dou
     cdef double exponent     = -0.5*_triple_product(x, mu, inv_cov)
     cdef double lognorm      = LOGSQRT2-0.5*np.linalg.slogdet(inv_cov)[1]
     return -lognorm+exponent
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.nonecheck(False)
+@cython.cdivision(True)
+cdef double _log_norm_with_inv(np.ndarray[double, ndim = 1, mode = "c"] x, np.ndarray[double, ndim = 1, mode = "c"] mu, np.ndarray[double, ndim = 2, mode = "c"] inv_cov):
+    cdef double exponent     = -0.5*_triple_product(x, mu, inv_cov)
+    cdef double lognorm      = LOGSQRT2-0.5*np.linalg.slogdet(inv_cov)[1]
+    return -lognorm+exponent
              
 def log_norm(np.ndarray[double, ndim = 1, mode = "c"] x, np.ndarray[double, ndim = 1, mode = "c"] x0, np.ndarray[double, ndim = 2, mode = "c"] sigma):
     return _log_norm(x, x0, sigma)
+
+def mult_norm(np.ndarray[double, ndim = 1, mode = "c"] x, np.ndarray[double, ndim = 1, mode = "c"] x0, np.ndarray[double, ndim = 2, mode = "c"] inv_sigma):
+    return np.exp(_log_norm_with_inv(x, x0, inv_sigma))
 
 def scalar_log_norm(double x, double x0, double s):
     return _scalar_log_norm(x,x0,s)
