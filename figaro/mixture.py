@@ -404,7 +404,7 @@ class DPGMM:
         return gradient
 
     def _gradient_log_mixture_direction(self, x, i):
-        return np.sum(np.array([- w * (x[i]-comp.mu[i]) * np.sum(comp.inv_sigma[i,:] * (x - comp.mu)) * mult_norm(x, comp.mu, comp.inv_sigma) for comp, w in zip(self.mixture, self.w)]))
+        return np.sum(np.array([- w * np.sum(comp.inv_sigma[i,:] * (x - comp.mu)) * mult_norm(x, comp.mu, comp.inv_sigma) for comp, w in zip(self.mixture, self.w)]))
 
     def save_density(self):
         with open(Path(self.out_folder, 'mixture.pkl'), 'wb') as dill_file:
