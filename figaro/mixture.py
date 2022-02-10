@@ -365,7 +365,7 @@ class DPGMM:
         p_tot = self._evaluate_mixture_in_probit(x)
         gradient = np.zeros(self.dim)
         for i in range(self.dim):
-            gradient[i] = _gradient_log_mixture_direction(x, i)/p_tot
+            gradient[i] = self._gradient_log_mixture_direction(x, i)/p_tot
         return gradient
 
     def _gradient_log_mixture_direction(self, x, i):
