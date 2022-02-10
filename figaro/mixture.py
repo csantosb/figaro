@@ -157,7 +157,6 @@ class component:
         self.cov   = np.identity(x.shape[-1])*0.
         self.mu    = np.atleast_2d((prior.mu*prior.k + self.N*self.mean)/(prior.k + self.N)).astype(np.float64)[0]
         self.sigma = np.identity(x.shape[-1]).astype(np.float64)*prior.L
-        self.w     = 0.
         self.inv_sigma = np.linalg.inv(self.sigma)
 
 class component_h:
@@ -178,7 +177,6 @@ class component_h:
             integrator.run()
             sample = np.array(integrator.posterior_samples[-1].tolist())[:-2]
         self.mu, self.sigma = build_mean_cov(sample, self.dim)
-        self.w = 0.
     
 class mixture:
     def __init__(self, means, covs, w, bounds, dim, n_cl):
@@ -277,16 +275,16 @@ class DPGMM:
         self.alpha      = alpha0
         self.alpha_0    = alpha0
         self.mixture    = []
+        self.N_list     = []
         self.n_cl       = 0
         self.n_pts      = 0
-        self.normalised = False
     
     def initialise(self):
         self.alpha = self.alpha_0
         self.mixture  = []
+        self.N_list   = []
         self.n_cl     = 0
         self.n_pts    = 0
-        self.normalised = False
         
     def add_datapoint_to_component(self, x, ss):
         new_mean, new_cov, new_N, new_mu, new_sigma = compute_component_suffstats(x, ss.mean, ss.cov, ss.N, ss.mu, ss.sigma, self.prior.mu, self.prior.k, self.prior.nu, self.prior.L)
@@ -328,9 +326,16 @@ class DPGMM:
         cid = np.random.choice(labels, p=scores)
         if cid == "new":
             self.mixture.append(component(x, prior = self.prior))
+            self.N_list.append(1.)
             self.n_cl += 1
         else:
             self.mixture[int(cid)] = self.add_datapoint_to_component(x, self.mixture[int(cid)])
+            self.N_list[int(cid)] += 1
+            
+        # Update weights
+        self.w = np.array(self.N_list)
+        self.w = self.w/self.w.sum()
+        self.log_w = np.log(self.w)
         return
     
     def density_from_samples(self, samples):
@@ -343,16 +348,8 @@ class DPGMM:
         self.assign_to_cluster(x)
         self.alpha = update_alpha(self.alpha, self.n_pts, self.n_cl)
     
-    def normalise_mixture(self):
-        for ss in self.mixture:
-            ss.w = ss.N/self.n_pts
-        self.w = np.array([ss.w for ss in self.mixture])
-        self.log_w = np.log(self.w)
-    
     @from_probit
     def sample_from_dpgmm(self, n_samps):
-        if not self.normalised:
-            self.normalise_mixture()
         idx = np.random.choice(np.arange(self.n_cl), p = self.w, size = n_samps)
         ctr = Counter(idx)
         samples = np.empty(shape = (1,self.dim))
@@ -361,42 +358,35 @@ class DPGMM:
         return samples[1:]
 
     def _evaluate_mixture_in_probit(self, x):
-        self.normalise_mixture()
         p = np.sum(np.array([w*mn(comp.mu, comp.sigma).pdf(x) for comp, w in zip(self.mixture, self.w)]), axis = 0)
         return p
 
     @probit
     def evaluate_mixture(self, x):
-        self.normalise_mixture()
         p = np.sum(np.array([w*mn(comp.mu, comp.sigma).pdf(x) for comp, w in zip(self.mixture, self.w)]), axis = 0)
         return p
     
     @probit
     def evaluate_mixture_with_jacobian(self, x):
-        self.normalise_mixture()
         p = np.sum(np.array([w*mn(comp.mu, comp.sigma).pdf(x) for comp, w in zip(self.mixture, self.w)]), axis = 0)
         return p * np.exp(-probit_logJ(x, self.bounds))
 
     def _evaluate_log_mixture_in_probit(self, x):
-        self.normalise_mixture()
         p = logsumexp(np.array([w + mn(comp.mu, comp.sigma).logpdf(x) for comp, w in zip(self.mixture, self.log_w)]), axis = 0)
         return p
 
     @probit
     def evaluate_log_mixture(self, x):
-        self.normalise_mixture()
         p = logsumexp(np.array([w + mn(comp.mu, comp.sigma).logpdf(x) for comp, w in zip(self.mixture, self.log_w)]), axis = 0)
         return p
         
     @probit
     def evaluate_log_mixture_with_jacobian(self, x):
-        self.normalise_mixture()
         p = logsumexp(np.array([w + mn(comp.mu, comp.sigma).logpdf(x) for comp, w in zip(self.mixture, self.log_w)]), axis = 0)
         return p - probit_logJ(x, self.bounds)
 
     @probit
     def evaluate_gradient_log_mixture(self, x):
-        self.normalise_mixture()
         p_tot = self._evaluate_mixture_in_probit(x)
         gradient = np.zeros(self.dim)
         for i in range(self.dim):
@@ -411,7 +401,6 @@ class DPGMM:
             dill.dump(self, dill_file)
         
     def draw_sample(self):
-        self.normalise_mixture()
         return mixture(np.array([comp.mu for comp in self.mixture]), np.array([comp.sigma for comp in self.mixture]), np.array(self.w), self.bounds, self.dim, self.n_cl)
 
 
@@ -457,9 +446,16 @@ class HDPGMM(DPGMM):
         cid = np.random.choice(labels, p=scores)
         if cid == "new":
             self.mixture.append(component_h(x, self.dim, self.prior))
+            self.N_list.append(1.)
             self.n_cl += 1
         else:
             self.mixture[int(cid)] = self.add_datapoint_to_component(x, self.mixture[int(cid)])
+            self.N_list[int(cid)] += 1
+        
+        # Update weights
+        self.w = np.array(self.N_list)
+        self.w = self.w/self.w.sum()
+        self.log_w = np.log(self.w)
         return
 
     def log_predictive_likelihood(self, x, ss):
