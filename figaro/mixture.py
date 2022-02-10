@@ -13,6 +13,7 @@ import cpnest.model
 from figaro.decorators import *
 from figaro.transform import *
 from figaro.metropolis import sample_point
+from figaro.integral import mult_norm
 
 from numba import jit, njit
 from numba.extending import get_cython_function_address
@@ -157,6 +158,7 @@ class component:
         self.mu    = np.atleast_2d((prior.mu*prior.k + self.N*self.mean)/(prior.k + self.N)).astype(np.float64)[0]
         self.sigma = np.identity(x.shape[-1]).astype(np.float64)*prior.L
         self.w     = 0.
+        self.inv_sigma = np.linalg.inv(self.sigma)
 
 class component_h:
     def __init__(self, x, dim, prior):
@@ -293,6 +295,7 @@ class DPGMM:
         ss.N     = new_N
         ss.mu    = new_mu
         ss.sigma = new_sigma
+        ss.inv_sigma = np.linalg.inv(ss.sigma)
         return ss
     
     def log_predictive_likelihood(self, x, ss):
@@ -391,6 +394,18 @@ class DPGMM:
         p = logsumexp(np.array([w + mn(comp.mu, comp.sigma).logpdf(x) for comp, w in zip(self.mixture, self.log_w)]), axis = 0)
         return p - probit_logJ(x, self.bounds)
 
+    @probit
+    def evaluate_gradient_log_mixture(self, x):
+        self.normalise_mixture()
+        p_tot = self._evaluate_mixture_in_probit(x)
+        gradient = np.zeros(self.dim)
+        for i in range(self.dim):
+            gradient[i] = _gradient_log_mixture_direction(x, i)/p_tot
+        return gradient
+
+    def _gradient_log_mixture_direction(self, x, i):
+        return np.sum(np.array([- w * (x[i]-comp.mu[i]) * np.sum(comp.inv_sigma[i,:] * (x - comp.mu)) * mult_norm(x, comp.mu, comp.inv_sigma) for comp, w in zip(self.mixture, self.w)]))
+
     def save_density(self):
         with open(Path(self.out_folder, 'mixture.pkl'), 'wb') as dill_file:
             dill.dump(self, dill_file)
@@ -409,7 +424,7 @@ class HDPGMM(DPGMM):
                        ):
         dim = len(bounds)
         if prior_pars == None:
-            prior_pars = (1e-1, np.identity(dim)*0.05, dim, np.zeros(dim))
+            prior_pars = (1e-3, np.identity(dim)*0.05, dim, np.zeros(dim))
         super().__init__(bounds = bounds, prior_pars = prior_pars, alpha0 = alpha0, out_folder = out_folder)
         self.MC_draws = int(MC_draws)
     
