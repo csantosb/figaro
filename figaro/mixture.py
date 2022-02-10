@@ -15,34 +15,16 @@ from figaro.transform import *
 from figaro.metropolis import sample_point
 from figaro.integral import mult_norm
 
-from numba import jit, njit
-from numba.extending import get_cython_function_address
-import ctypes
-
-_PTR = ctypes.POINTER
-_dble = ctypes.c_double
-_ptr_dble = _PTR(_dble)
-
-addr = get_cython_function_address("scipy.special.cython_special", "gammaln")
-functype = ctypes.CFUNCTYPE(_dble, _dble)
-gammaln_float64 = functype(addr)
-
 #-----------#
 # Functions #
 #-----------#
 
-@jit
 def log_add(x, y):
      if x >= y:
         return x+np.log1p(np.exp(y-x))
      else:
         return y+np.log1p(np.exp(x-y))
 
-@njit
-def numba_gammaln(x):
-    return gammaln_float64(x)
-
-@jit
 def student_t(df, t, mu, sigma, dim):
     """
     http://gregorygundersen.com/blog/2020/01/20/multivariate-t/
@@ -55,28 +37,26 @@ def student_t(df, t, mu, sigma, dim):
     maha       = np.square(np.dot(dev, U)).sum(axis=-1)
 
     x = 0.5 * (df + dim)
-    A = numba_gammaln(x)
-    B = numba_gammaln(0.5 * df)
+    A = gammaln(x)
+    B = gammaln(0.5 * df)
     C = dim/2. * np.log(df * np.pi)
     D = 0.5 * logdet
     E = -x * np.log1p((1./df) * maha)
 
     return (A - B - C - D + E)[0]
 
-@jit
 def update_alpha(alpha, n, K, burnin = 100):
     a_old = alpha
     n_draws = burnin+np.random.randint(100)
     for i in range(n_draws):
         a_new = a_old + (np.random.random() - 0.5)
         if a_new > 0.:
-            logP_old = numba_gammaln(a_old) - numba_gammaln(a_old + n) + K * np.log(a_old) - 1./a_old
-            logP_new = numba_gammaln(a_new) - numba_gammaln(a_new + n) + K * np.log(a_new) - 1./a_new
+            logP_old = gammaln(a_old) - gammaln(a_old + n) + K * np.log(a_old) - 1./a_old
+            logP_new = gammaln(a_new) - gammaln(a_new + n) + K * np.log(a_new) - 1./a_new
             if logP_new - logP_old > np.log(np.random.random()):
                 a_old = a_new
     return a_old
 
-@jit
 def compute_t_pars(k, mu, nu, L, mean, S, N, dim):
     # Update hyperparameters
     k_n, mu_n, nu_n, L_n = compute_hyperpars(k, mu, nu, L, mean, S, N)
@@ -85,7 +65,6 @@ def compute_t_pars(k, mu, nu, L, mean, S, N, dim):
     t_shape = L_n*(k_n+1)/(k_n*t_df)
     return t_df, t_shape, mu_n
 
-@jit
 def compute_hyperpars(k, mu, nu, L, mean, S, N):
     k_n  = k + N
     mu_n = (mu*k + N*mean)/k_n
@@ -93,7 +72,6 @@ def compute_hyperpars(k, mu, nu, L, mean, S, N):
     L_n  = L*k + S*N + k*N*((mean - mu).T@(mean - mu))/k_n
     return k_n, mu_n, nu_n, L_n
 
-@jit
 def compute_component_suffstats(x, mean, cov, N, mu, sigma, p_mu, p_k, p_nu, p_L):
 
     new_mean  = (mean*N+x)/(N+1)
@@ -104,7 +82,6 @@ def compute_component_suffstats(x, mean, cov, N, mu, sigma, p_mu, p_k, p_nu, p_L
     
     return new_mean, new_cov, new_N, new_mu, new_sigma
 
-#FIXME: jit
 def compute_t_pars_array(k, mu, nu, L, samples, N, dim):
     # Compute hyperparameters
     k_n, mu_n, nu_n, L_n = compute_hyperpars_array(k, mu, nu, L, samples, N)
@@ -122,7 +99,6 @@ def compute_hyperpars_array(k, mu, nu, L, samples, N):
         covs  = np.zeros(shape = (n_draws, samples.shape[2], samples.shape[2])) # 1 event: can't estimate covariance
     return _hyperpars_vect(k, mu, nu, L, means, covs, N, n_draws)
 
-@jit
 def _hyperpars_vect(k, mu, nu, L, means, covs, N, n_draws):
     k_n  = (k + N)
     nu_n = (nu + N)
@@ -130,7 +106,6 @@ def _hyperpars_vect(k, mu, nu, L, means, covs, N, n_draws):
     L_n  = L*k + covs*N + k*N*((means - mu).T@(means - mu))/k_n
     return k_n, mu_n, nu_n, L_n
     
-@jit
 def student_t_array(df, t, mu, sigma, dim, len_t):
     logP = -np.inf
     for i in range(len_t):
