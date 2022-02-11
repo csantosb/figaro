@@ -13,7 +13,6 @@ import cpnest.model
 from figaro.decorators import *
 from figaro.transform import *
 from figaro.metropolis import sample_point
-from figaro.integral import mult_norm
 
 from numba import jit, njit
 from numba.extending import get_cython_function_address
@@ -26,6 +25,9 @@ _ptr_dble = _PTR(_dble)
 addr = get_cython_function_address("scipy.special.cython_special", "gammaln")
 functype = ctypes.CFUNCTYPE(_dble, _dble)
 gammaln_float64 = functype(addr)
+
+LOGSQRT2 = np.log(np.sqrt(2*np.pi))
+SQRT2    = np.sqrt(2)
 
 #-----------#
 # Functions #
@@ -42,18 +44,43 @@ def log_add(x, y):
 def numba_gammaln(x):
     return gammaln_float64(x)
 
+
+@njit
+def inv_jit(M):
+  return np.linalg.inv(M)
+
+@njit
+def logdet_jit(M):
+    return np.log(np.linalg.det(M))
+
+@njit
+def det_jit(M):
+    return np.linalg.det(M)
+
+@njit
+def triple_product(v, M, n):
+    res = np.zeros(1, dtype = np.float64)
+    for i in prange(n):
+        for j in prange(n):
+            res = res + M[i,j]*v[i]*v[j]
+    return res
+
 @jit
 def student_t(df, t, mu, sigma, dim):
     """
     http://gregorygundersen.com/blog/2020/01/20/multivariate-t/
     """
-    vals, vecs = np.linalg.eigh(sigma)
-    logdet     = np.log(vals).sum()
-    valsinv    = np.array([1./v for v in vals])
-    U          = vecs * np.sqrt(valsinv)
-    dev        = t - mu
-    maha       = np.square(np.dot(dev, U)).sum(axis=-1)
+#    vals, vecs = np.linalg.eigh(sigma)
+#    logdet     = np.log(vals).sum()
+#    valsinv    = np.array([1./v for v in vals])
+#    U          = vecs * np.sqrt(valsinv)
+#    dev        = t - mu
+#    maha       = np.square(np.dot(dev, U)).sum(axis=-1)
 
+    inv = inv_jit(sigma)
+    logdet = logdet_jit(sigma)
+    maha = triple_product(t-mu, inv, dim)
+    
     x = 0.5 * (df + dim)
     A = numba_gammaln(x)
     B = numba_gammaln(0.5 * df)
@@ -146,6 +173,34 @@ def build_mean_cov(x, dim):
     cov_mat = sigma@corr
     return mean, cov_mat
 
+@jit
+def mult_norm(x, mu, inv_cov):
+    dim = x.shape[-1]
+    exponent = np.exp(-0.5*triple_product(x - mu, inv_cov, dim))
+    norm     = SQRT2*np.sqrt(1/det_jit(inv_cov))
+    return exponent/norm
+
+@jit
+def log_mult_norm(x, mu, inv_cov):
+    dim = x.shape[-1]
+    exponent = -0.5*triple_product(x - mu, inv_cov, dim)
+    norm     = LOGSQRT2-0.5*logdet_jit(inv_cov)
+    return exponent - norm
+
+@jit
+def gradient_log_mixture_direction(x, i, mixture, w):
+    res = np.zeros(w.shape[0])
+    for i in prange(w.shape[0]):
+        res[i] = - w[i] * np.sum(mixture[i].inv_sigma[i,:] * (x - mixture[i].mu)) * mult_norm(np.atleast_1d(x), mixture[i].mu, mixture[i].inv_sigma)
+    return np.sum(res)
+
+@jit
+def evaluate_mixture_jit(x, mixture, log_w):
+    logP = -np.inf
+    for i in prange(len(mixture)):
+        logP = log_add(logP, log_w[i] + log_mult_norm(x, mixture[i].mu, mixture[i].inv_cov))
+    return logP
+
 #-------------------#
 # Auxiliary classes #
 #-------------------#
@@ -157,7 +212,7 @@ class component:
         self.cov   = np.identity(x.shape[-1])*0.
         self.mu    = np.atleast_2d((prior.mu*prior.k + self.N*self.mean)/(prior.k + self.N)).astype(np.float64)[0]
         self.sigma = np.identity(x.shape[-1]).astype(np.float64)*prior.L
-        self.inv_sigma = np.linalg.inv(self.sigma)
+        self.inv_sigma = inv_jit(self.sigma)
 
 class component_h:
     def __init__(self, x, dim, prior):
@@ -293,7 +348,7 @@ class DPGMM:
         ss.N     = new_N
         ss.mu    = new_mu
         ss.sigma = new_sigma
-        ss.inv_sigma = np.linalg.inv(ss.sigma)
+        ss.inv_sigma = inv_jit(ss.sigma)
         return ss
     
     def log_predictive_likelihood(self, x, ss):
@@ -387,14 +442,11 @@ class DPGMM:
 
     @probit
     def evaluate_gradient_log_mixture(self, x):
-        p_tot = self._evaluate_mixture_in_probit(x)
+        p_tot = evaluate_mixture_jit(x, self.mixture, self.log_w)
         gradient = np.zeros(self.dim)
         for i in range(self.dim):
-            gradient[i] = self._gradient_log_mixture_direction(x, i)/p_tot
+            gradient[i] = gradient_log_mixture_direction(x, i, self.mixture, self.w)/p_tot
         return gradient
-
-    def _gradient_log_mixture_direction(self, x, i):
-        return np.sum(np.array([- w * np.sum(comp.inv_sigma[i,:] * (x - comp.mu)) * mult_norm(np.atleast_1d(x), comp.mu, comp.inv_sigma) for comp, w in zip(self.mixture, self.w)]))
 
     def save_density(self):
         with open(Path(self.out_folder, 'mixture.pkl'), 'wb') as dill_file:
