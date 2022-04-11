@@ -159,9 +159,11 @@ class component_h:
         
         if self.dim == 1:
             sample = sample_point_1d(self.means, self.covs, self.log_w, a = prior.nu+1, b = prior.L[0,0])
+            self.mu = np.atleast_2d(sample[0])
+            self.sigma = np.atleast_2d(sample[1]**2)
         else:
             sample = sample_point(self.means, self.covs, self.log_w, a = prior.nu, b = prior.L)
-        self.mu, self.sigma = build_mean_cov(sample, self.dim)
+            self.mu, self.sigma = build_mean_cov(sample, self.dim)
     
 class mixture:
     def __init__(self, means, covs, w, bounds, dim, n_cl, n_pts, n_draws = 1000):
@@ -253,7 +255,7 @@ class DPGMM:
         if prior_pars is not None:
             self.prior = prior(*prior_pars)
         else:
-            self.prior = prior(1e-3, np.identity(self.dim)*0.2**2, self.dim, np.zeros(self.dim))
+            self.prior = prior(1e-1, np.identity(self.dim)*0.2**2, self.dim, np.zeros(self.dim))
         self.alpha      = alpha0
         self.alpha_0    = alpha0
         self.mixture    = []
@@ -395,7 +397,7 @@ class HDPGMM(DPGMM):
                        ):
         dim = len(bounds)
         if prior_pars == None:
-            prior_pars = (1e-3, np.identity(dim)*0.2**2, dim, np.zeros(dim))
+            prior_pars = (1e-1, np.identity(dim)*0.2**2, dim, np.zeros(dim))
         super().__init__(bounds = bounds, prior_pars = prior_pars, alpha0 = alpha0, out_folder = out_folder, n_draws_norm = n_draws_norm)
         self.MC_draws = int(MC_draws)
     
@@ -469,9 +471,11 @@ class HDPGMM(DPGMM):
         
         if self.dim == 1:
             sample = sample_point_1d(ss.means, ss.covs, ss.log_w, a = self.prior.nu+1, b = self.prior.L[0,0])
+            ss.mu = np.atleast_2d(sample[0])
+            ss.sigma = np.atleast_2d(sample[1]**2)
         else:
             sample = sample_point(ss.means, ss.covs, ss.log_w, a = self.prior.nu, b = self.prior.L)
-        ss.mu, ss.sigma = build_mean_cov(sample, self.dim)
+            ss.mu, ss.sigma = build_mean_cov(sample, self.dim)
         ss.N += 1
         return ss
 
